@@ -2,9 +2,9 @@
 and de-serializes JavaScript values with [MessagePack](https://msgpack.org).
 Packed output is a `Buffer` and is typically much smaller than JSON.
 
-This tree is a security-focused 2.0 fork (`enochgroot/msgpack-node`).
-It requires **Node.js 18+**, vendors **msgpack-c c-7.0.2**, and rejects
-oversized unpack headers instead of allocating them. See `SECURITY.md`.
+Version 2.0 requires **Node.js 18+**, vendors **msgpack-c c-7.0.2**, and
+rejects oversized unpack headers instead of allocating them. See
+[`SECURITY.md`](SECURITY.md).
 
 ### Usage
 
@@ -92,16 +92,92 @@ on Ubuntu and macOS. `npm run coverage` instruments JavaScript with c8 and the
 native addon with gcov, and fails under 95%. Gates and remaining uncovered
 lines are documented in [`COVERAGE.md`](COVERAGE.md).
 
-### Command line
+### Command Line Utilities
 
-`bin/json2msgpack` and `bin/msgpack2json` convert JSON ↔ MessagePack on
-stdin/stdout:
+Two utilities convert between JSON and MessagePack on stdin/stdout:
+`bin/json2msgpack` reads JSON and writes MessagePack, and `bin/msgpack2json`
+reads MessagePack and writes JSON. Both are installed on `PATH` when the
+package is installed globally.
+
+```
+echo '[1, 2, 3]' | ./bin/json2msgpack | xxd
+```
+
+```
+00000000: 9301 0203                                ....
+```
+
+Piping the two together round-trips a value:
+
+```
+echo '[1, 2, 3]' | ./bin/json2msgpack | ./bin/msgpack2json
+```
+
+```
+[1,2,3]
+```
 
 ```
 echo '{"hello":"world"}' | bin/json2msgpack | bin/msgpack2json
 ```
 
+```
+{"hello":"world"}
+```
+
+`msgpack2json` prints one JSON value per line and consumes every complete
+message in its input. Both exit non-zero on invalid or truncated input.
+
+### Benchmarks
+
+```
+npm run bench
+```
+
+or equivalently:
+
+```
+node test/benchmark/benchmark.js
+```
+
+The benchmark serializes the object `{'abcdef': 1, 'qqq': 13, '19': [1, 2, 3, 4]}`
+500,000 times through four paths, after a warm-up pass. A representative run:
+
+```
+node       v20.20.2
+v8         11.3.244.8-node.38
+platform   linux 6.12.76-linuxkit (arm64)
+cpu        arm64 (model not reported) x 8, 7.8 GiB RAM
+data       {"19":[1,2,3,4],"abcdef":1,"qqq":13}
+iterations 500,000
+
+JSON.stringify()                     179 ms  (0.18 s)
+JSON.parse(JSON.stringify())         346 ms  (0.35 s)
+msgpack.pack()                      1021 ms  (1.02 s)
+msgpack.unpack(msgpack.pack())      1585 ms  (1.59 s)
+```
+
+Measured on 2026-09-10: Node.js v20.20.2, Debian 12 (bookworm), Linux
+6.12.76-linuxkit aarch64 container (8 vCPUs, 7.8 GiB RAM). Numbers are for
+that machine and object shape only — re-run `npm run bench` on your own
+hardware before drawing conclusions.
+
+On small objects like this one, V8's native JSON codec is faster than crossing
+the JS/C++ boundary per call; msgpack's advantage is payload size (20 bytes here
+versus 36 for the JSON text) and its ability to carry binary data without
+base64. Large `Buffer` payloads and batched (single-call) packing shift the
+comparison considerably.
+
 ### License
 
-BSD-3-Clause for this addon. Vendored msgpack-c is Boost Software License 1.0
-(`deps/msgpack/LICENSE`).
+This addon is **BSD-3-Clause** (Copyright (c) 2010, Peter Griess); see
+[`LICENSE`](LICENSE).
+
+The vendored MessagePack C library in `deps/msgpack/` is **Boost Software
+License 1.0**, as shipped by msgpack-c c-7.0.2; see `deps/msgpack/LICENSE`.
+msgpack-c was Apache-2.0 through 1.2.x and relicensed to BSL-1.0 in release
+1.3.0 (2015-11-21), so the Boost text is the correct license for these files:
+
+* relicensing discussion: <https://github.com/msgpack/msgpack-c/issues/366>
+* msgpack-c `CHANGELOG.md`, 1.3.0: "Change license from Apache 2.0 to Boost
+  Software License, Version 1.0 (#386)"

@@ -1,5 +1,5 @@
 // Type definitions for msgpack 2.0.0
-// Project: https://github.com/enochgroot/msgpack-node
+// Project: https://github.com/msgpack/msgpack-node
 
 /// <reference types="node" />
 

@@ -2,12 +2,12 @@
   "name": "msgpack",
   "description": "A space-efficient object serialization library for Node.js",
   "version": "2.0.0",
-  "homepage": "https://github.com/enochgroot/msgpack-node",
+  "homepage": "https://github.com/msgpack/msgpack-node",
   "author": "Peter Griess <pg@std.in>",
   "contributors": [],
   "repository": {
     "type": "git",
-    "url": "https://github.com/enochgroot/msgpack-node.git"
+    "url": "https://github.com/msgpack/msgpack-node.git"
   },
   "main": "./lib/msgpack",
   "types": "index.d.ts",
@@ -22,6 +22,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
+    "bench": "node test/benchmark/benchmark.js",
     "rebuild": "node-gyp rebuild",
     "coverage": "npm run coverage:js && npm run coverage:native",
     "coverage:js": "c8 --include=lib --include=bin --extension=.js --extension= --all --check-coverage --statements 95 --branches 95 --functions 95 --lines 95 --reporter=text --reporter=lcov node --test test/*.test.js",
