@@ -10,7 +10,9 @@ rejects:
 
 - array/map counts above 1,000,000
 - str/bin/ext lengths above 32 MiB
-- nesting deeper than 512
+- nesting deeper than 512 (the vendored library is built with
+  `MSGPACK_EMBED_STACK_SIZE=512`, up from the msgpack-c default of 32, so the
+  walker's limit is what callers hit rather than a generic C parse error)
 - container counts that cannot fit in the remaining buffer when the declared
   size is also past those caps
 
@@ -33,6 +35,13 @@ in the vendored sources.
 CVE-2026-72854 (msgpack-c unpacker buffer expansion) is addressed by staying
 on c-7.0.2 rather than the historical 0.5.x/1.x C snapshot this addon used
 to ship.
+
+## Pack recursion
+
+`pack()` bounds its own recursion at 512 levels and throws `Cowardly refusing
+to pack object nested more than 512 levels deep`. Without that cap, a value
+such as 8,000 nested arrays recursed until the C stack overflowed and the
+process died with SIGSEGV.
 
 ## nodejs/node#25686 (sbuffer leak on pack throw)
 

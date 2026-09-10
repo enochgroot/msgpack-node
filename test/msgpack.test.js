@@ -4,6 +4,8 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 const net = require('net');
+const path = require('path');
+const { execFileSync } = require('child_process');
 const msgpack = require('../lib/msgpack');
 const stub = require('./fixtures/stub');
 
@@ -70,6 +72,38 @@ describe('msgpack pack/unpack', () => {
     assert.deepEqual(msgpack.unpack(msgpack.pack(obj)), { b: 2 });
   });
 
+  it('uses toJSON on nested objects too', () => {
+    const o = { inner: { toJSON: () => ({ b: 2 }) } };
+    assert.deepEqual(msgpack.unpack(msgpack.pack(o)), { inner: { b: 2 } });
+  });
+
+  it('packs a top-level Date as its ISO string', () => {
+    const d = new Date('2000-06-13T00:00:00.000Z');
+    assert.equal(msgpack.unpack(msgpack.pack(d)), '2000-06-13T00:00:00.000Z');
+  });
+
+  it('packs a nested Date as its ISO string', () => {
+    const d = new Date('2000-06-13T00:00:00.000Z');
+    assert.deepEqual(msgpack.unpack(msgpack.pack({ d })), {
+      d: '2000-06-13T00:00:00.000Z',
+    });
+  });
+
+  it('packs numeric keys as well as string keys', () => {
+    assert.deepEqual(msgpack.unpack(msgpack.pack({ 1: 'a', b: 'c' })), {
+      1: 'a',
+      b: 'c',
+    });
+  });
+
+  it('does not drop a user key named _msgpack_stack', () => {
+    /* Cycle marks are V8 private symbols now, so this is an ordinary key. */
+    assert.deepEqual(msgpack.unpack(msgpack.pack({ _msgpack_stack: 1, b: 2 })), {
+      _msgpack_stack: 1,
+      b: 2,
+    });
+  });
+
   it('throws on circular object and array', () => {
     const o = {};
     o.a = o;
@@ -128,6 +162,46 @@ describe('msgpack.Stream', () => {
     assert.equal(ms.listeners('msg')[0].args[0], 'hello');
   });
 
+  it('emits msg for a packed null', () => {
+    /* A decoded nil is a message, not an incomplete buffer. */
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    const msgs = [];
+    ms.addListener('msg', (m) => msgs.push(m));
+    s.emit('data', msgpack.pack(null));
+    s.emit('data', Buffer.concat([msgpack.pack(null), msgpack.pack('after')]));
+    assert.deepEqual(msgs, [null, null, 'after']);
+  });
+
+  it('waits on a truncated payload without emitting', () => {
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    ms.addListener('msg', stub());
+    const packed = msgpack.pack({ a: 'abc', b: [1, 2, 3] });
+    s.emit('data', packed.subarray(0, packed.length - 1));
+    assert.equal(ms.listeners('msg')[0].called, false);
+  });
+
+  it('emits error instead of throwing when unpack fails', () => {
+    /* array32 header claiming 0xff000000 elements: unpack throws, and the
+     * data listener must not turn that into an uncaughtException. */
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    const errors = [];
+    ms.addListener('error', (e) => errors.push(e));
+    ms.addListener('msg', stub());
+
+    s.emit('data', Buffer.from([0xdd, 0xff, 0x00, 0x00, 0x00]));
+
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].message, /limit exceeded/);
+    assert.equal(ms.listeners('msg')[0].called, false);
+    /* The bomb is dropped, not retried: a following good packet parses. */
+    s.emit('data', msgpack.pack('ok'));
+    assert.equal(ms.listeners('msg')[0].args[0], 'ok');
+    assert.equal(errors.length, 1);
+  });
+
   it('round-trips over a TCP socket', (t, done) => {
     const server = net.createServer((c) => {
       c.write(msgpack.pack('hello '));
@@ -152,5 +226,33 @@ describe('msgpack.Stream', () => {
         });
       });
     });
+  });
+});
+
+describe('bin scripts', () => {
+  const bin = (name) => path.join(__dirname, '..', 'bin', name);
+  const run = (name, input) =>
+    execFileSync(process.execPath, [bin(name)], { input, maxBuffer: 1 << 20 });
+
+  it('msgpack2json writes JSON for a packed value', () => {
+    const out = run('msgpack2json', msgpack.pack({ a: 1, b: [2, 3] }));
+    assert.deepEqual(JSON.parse(out.toString('utf8')), { a: 1, b: [2, 3] });
+  });
+
+  it('msgpack2json writes one line per concatenated message', () => {
+    const input = Buffer.concat([msgpack.pack('one'), msgpack.pack('two')]);
+    const lines = run('msgpack2json', input).toString('utf8').trim().split('\n');
+    assert.deepEqual(lines, ['"one"', '"two"']);
+  });
+
+  it('json2msgpack writes MessagePack for JSON on stdin', () => {
+    const out = run('json2msgpack', '{"a":1,"b":[2,3]}');
+    assert.deepEqual(msgpack.unpack(out), { a: 1, b: [2, 3] });
+  });
+
+  it('json2msgpack and msgpack2json round-trip', () => {
+    const packed = run('json2msgpack', '{"hello":"world"}');
+    const json = run('msgpack2json', packed).toString('utf8');
+    assert.deepEqual(JSON.parse(json), { hello: 'world' });
   });
 });

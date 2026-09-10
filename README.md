@@ -19,18 +19,22 @@ const oo = msgpack.unpack(b);
 assert.deepEqual(oo, o);
 ```
 
-`pack()` accepts any JSON-like value plus Node `Buffer`s. `unpack()` consumes
-a `Buffer` and returns a JavaScript value, or `null` if the buffer is a
-truncated (incomplete) MessagePack object. Oversized array/map/string bombs
-throw.
+`pack()` accepts any JSON-like value plus Node `Buffer`s and `Date`s.
+`unpack()` consumes a `Buffer` and returns a JavaScript value, or `null` if
+the buffer is a truncated (incomplete) MessagePack object. Oversized
+array/map/string bombs throw.
 
-A streaming helper wraps a readable socket and emits `msg`:
+A streaming helper wraps a readable socket and emits `msg`, plus `error` when
+a packet cannot be unpacked (the offending buffer is dropped):
 
 ```javascript
 const msgpack = require('msgpack');
 const ms = new msgpack.Stream(socket);
 ms.on('msg', (m) => {
   console.log('received', m);
+});
+ms.on('error', (e) => {
+  console.error('bad packet', e.message);
 });
 ms.send({ hello: 'world' });
 ```
@@ -44,10 +48,14 @@ Packing:
 * finite integers → uint/int
 * other numbers → float64
 * `string` → str (UTF-8)
+* `Date` → str (ISO 8601, `toISOString()`), at any nesting level
 * `Buffer` → bin
 * `Array` → array
-* other objects → map (own enumerable string keys)
-* functions and circular refs throw
+* objects with a `toJSON()` method → whatever `toJSON()` returns, at any
+  nesting level
+* other objects → map of every own enumerable key; numeric keys are packed as
+  integer keys, not dropped
+* functions, circular refs, and nesting deeper than 512 throw
 
 Unpacking:
 
@@ -65,9 +73,11 @@ successful (or attempted) unpack. Stream uses that to splice leftover data.
 
 * array/map length ≤ 1,000,000
 * str/bin/ext length ≤ 32 MiB
-* nesting depth ≤ 512
+* nesting depth ≤ 512 on both pack and unpack
 
-The payload `dd ff 00 00 00` throws `msgpack unpack limit exceeded`.
+The payload `dd ff 00 00 00` throws `msgpack unpack limit exceeded`. Packing a
+value nested deeper than 512 throws `Cowardly refusing to pack object nested
+more than 512 levels deep` instead of overflowing the C stack.
 
 ### Building, installation, testing
 
@@ -81,7 +91,12 @@ on Ubuntu and macOS.
 
 ### Command line
 
-`bin/json2msgpack` and `bin/msgpack2json` convert JSON ↔ MessagePack on stdin/stdout.
+`bin/json2msgpack` and `bin/msgpack2json` convert JSON ↔ MessagePack on
+stdin/stdout:
+
+```
+echo '{"hello":"world"}' | bin/json2msgpack | bin/msgpack2json
+```
 
 ### License
 

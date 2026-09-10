@@ -9,8 +9,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <cstring>
-#include <vector>
 
 #include <nan.h>
 #include <msgpack.h>
@@ -20,6 +18,12 @@ namespace {
 const uint32_t kMaxContainer = 1000000u;
 const uint32_t kMaxBytes = 32u * 1024u * 1024u;
 const int kMaxDepth = 512;
+/* Pack recursion is bounded the same way master bounded it, so deeply nested
+ * input throws instead of running the C stack out. */
+const int kMaxPackDepth = 512;
+/* Largest/smallest doubles that survive a cast to uint64_t/int64_t. */
+const double kTwoPow64 = 18446744073709551616.0;
+const double kInt64Min = -9223372036854775808.0;
 const size_t kSbufferPoolMax = 512;
 
 enum ScanStatus {
@@ -334,9 +338,27 @@ static bool IsMarked(v8::Local<v8::Object> obj) {
   return v.ToLocalChecked()->IsTrue();
 }
 
-static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o);
+static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth);
 
-static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr) {
+/*
+ * Call a zero-argument JS method, converting a JS-level throw into a
+ * MsgpackException carrying the original error so Pack() can rethrow it.
+ */
+static v8::Local<v8::Value> CallNoArgs(v8::Local<v8::Object> recv,
+                                       v8::Local<v8::Function> fn) {
+  Nan::TryCatch try_catch;
+  Nan::MaybeLocal<v8::Value> r = Nan::Call(fn, recv, 0, NULL);
+  if (r.IsEmpty()) {
+    v8::Local<v8::Value> ex = try_catch.Exception();
+    if (ex.IsEmpty()) {
+      throw MsgpackException(Error("Error serializing object"));
+    }
+    throw MsgpackException(ex);
+  }
+  return r.ToLocalChecked();
+}
+
+static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr, int depth) {
   if (IsMarked(arr)) {
     throw MsgpackException(Error("Cowardly refusing to pack circular reference"));
   }
@@ -348,7 +370,7 @@ static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr) {
   }
   try {
     for (uint32_t i = 0; i < len; i++) {
-      JsToMsgpack(pk, Nan::Get(arr, i).ToLocalChecked());
+      JsToMsgpack(pk, Nan::Get(arr, i).ToLocalChecked(), depth);
     }
   } catch (...) {
     Unmark(arr);
@@ -357,38 +379,41 @@ static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr) {
   Unmark(arr);
 }
 
-static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj) {
+static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj, int depth) {
   if (IsMarked(obj)) {
     throw MsgpackException(Error("Cowardly refusing to pack circular reference"));
   }
   Mark(obj);
 
-  v8::Local<v8::Array> names = Nan::GetOwnPropertyNames(obj).ToLocalChecked();
-  std::vector<uint32_t> keep;
-  keep.reserve(names->Length());
-  for (uint32_t i = 0; i < names->Length(); i++) {
-    v8::Local<v8::Value> key = Nan::Get(names, i).ToLocalChecked();
-    if (!key->IsString()) continue;
-    Nan::Utf8String ukey(key);
-    if (ukey.length() == 14 && std::strcmp(*ukey, "_msgpack_stack") == 0) {
-      continue;
+  /* toJSON wins over the map encoding, at every level, matching both
+   * JSON.stringify and the top-level wrapper in lib/msgpack.js. */
+  v8::Local<v8::Value> to_json =
+      Nan::Get(obj, Nan::New("toJSON").ToLocalChecked()).FromMaybe(
+          v8::Local<v8::Value>(Nan::Undefined()));
+  if (to_json->IsFunction()) {
+    try {
+      JsToMsgpack(pk, CallNoArgs(obj, to_json.As<v8::Function>()), depth);
+    } catch (...) {
+      Unmark(obj);
+      throw;
     }
-    keep.push_back(i);
+    Unmark(obj);
+    return;
   }
 
-  if (msgpack_pack_map(pk, keep.size())) {
+  /* Every own enumerable key is packed, numeric keys included; V8 hands back
+   * index keys as Numbers, which JsToMsgpack packs as integer map keys. */
+  v8::Local<v8::Array> names = Nan::GetOwnPropertyNames(obj).ToLocalChecked();
+  uint32_t len = names->Length();
+  if (msgpack_pack_map(pk, len)) {
     Unmark(obj);
     throw MsgpackException(Error("Error serializing object"));
   }
   try {
-    for (uint32_t i : keep) {
+    for (uint32_t i = 0; i < len; i++) {
       v8::Local<v8::Value> key = Nan::Get(names, i).ToLocalChecked();
-      Nan::Utf8String ukey(key);
-      if (msgpack_pack_str(pk, ukey.length()) ||
-          msgpack_pack_str_body(pk, *ukey, ukey.length())) {
-        throw MsgpackException(Error("Error serializing object"));
-      }
-      JsToMsgpack(pk, Nan::Get(obj, key).ToLocalChecked());
+      JsToMsgpack(pk, key, depth);
+      JsToMsgpack(pk, Nan::Get(obj, key).ToLocalChecked(), depth);
     }
   } catch (...) {
     Unmark(obj);
@@ -397,8 +422,13 @@ static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj) {
   Unmark(obj);
 }
 
-static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o) {
+static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
   int rc = 0;
+
+  if (kMaxPackDepth < ++depth) {
+    throw MsgpackException(
+        Error("Cowardly refusing to pack object nested more than 512 levels deep"));
+  }
 
   if (o->IsUndefined() || o->IsNull()) {
     rc = msgpack_pack_nil(pk);
@@ -406,12 +436,12 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o) {
     rc = o->IsTrue() ? msgpack_pack_true(pk) : msgpack_pack_false(pk);
   } else if (o->IsNumber()) {
     double d = Nan::To<double>(o).FromJust();
-    if (std::isfinite(d) && std::trunc(d) == d) {
-      if (d >= 0) {
-        rc = msgpack_pack_uint64(pk, static_cast<uint64_t>(d));
-      } else {
-        rc = msgpack_pack_int64(pk, static_cast<int64_t>(d));
-      }
+    /* Only take an integer path when the value actually fits the integer
+     * type; otherwise the cast is undefined behavior (1e30 became 2^64-1). */
+    if (std::isfinite(d) && std::trunc(d) == d && d >= 0 && d < kTwoPow64) {
+      rc = msgpack_pack_uint64(pk, static_cast<uint64_t>(d));
+    } else if (std::isfinite(d) && std::trunc(d) == d && d < 0 && d >= kInt64Min) {
+      rc = msgpack_pack_int64(pk, static_cast<int64_t>(d));
     } else {
       rc = msgpack_pack_double(pk, d);
     }
@@ -421,6 +451,23 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o) {
     if (rc == 0) {
       rc = msgpack_pack_str_body(pk, *bytes, bytes.length());
     }
+  } else if (o->IsDate()) {
+    /* Dates pack as their ISO-8601 string, as they did before 2.0.0. */
+    v8::Local<v8::Object> date = o.As<v8::Object>();
+    v8::Local<v8::Value> fn =
+        Nan::Get(date, Nan::New("toISOString").ToLocalChecked()).ToLocalChecked();
+    if (!fn->IsFunction()) {
+      throw MsgpackException(Error("cannot pack Date"));
+    }
+    v8::Local<v8::Value> iso = CallNoArgs(date, fn.As<v8::Function>());
+    Nan::Utf8String bytes(iso);
+    rc = msgpack_pack_str(pk, bytes.length());
+    if (rc == 0) {
+      rc = msgpack_pack_str_body(pk, *bytes, bytes.length());
+    }
+  } else if (o->IsArray()) {
+    PackArray(pk, o.As<v8::Array>(), depth);
+    return;
   } else if (node::Buffer::HasInstance(o)) {
     char* data = node::Buffer::Data(o.As<v8::Object>());
     size_t len = node::Buffer::Length(o.As<v8::Object>());
@@ -428,13 +475,10 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o) {
     if (rc == 0) {
       rc = msgpack_pack_bin_body(pk, data, len);
     }
-  } else if (o->IsArray()) {
-    PackArray(pk, o.As<v8::Array>());
-    return;
   } else if (o->IsFunction()) {
     throw MsgpackException(Error("cannot pack function"));
   } else if (o->IsObject()) {
-    PackObject(pk, o.As<v8::Object>());
+    PackObject(pk, o.As<v8::Object>(), depth);
     return;
   } else {
     throw MsgpackException(Error("cannot pack object"));
@@ -569,13 +613,13 @@ NAN_METHOD(Pack) {
     msgpack_packer_init(&pk, buf.get(), msgpack_sbuffer_write);
 
     if (info.Length() == 1) {
-      JsToMsgpack(&pk, info[0]);
+      JsToMsgpack(&pk, info[0], 0);
     } else {
       if (msgpack_pack_array(&pk, info.Length())) {
         throw MsgpackException(Error("Error serializing object"));
       }
       for (int i = 0; i < info.Length(); i++) {
-        JsToMsgpack(&pk, info[i]);
+        JsToMsgpack(&pk, info[i], 0);
       }
     }
 

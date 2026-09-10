@@ -6,6 +6,9 @@
       "include_dirs": [
         "<!(node -e \"require('nan')\")"
       ],
+      "defines": [
+        "MSGPACK_EMBED_STACK_SIZE=512"
+      ],
       "dependencies": [
         "deps/msgpack/msgpack.gyp:libmsgpack"
       ],
