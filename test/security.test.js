@@ -110,3 +110,100 @@ describe('unpack depth vs the C embed stack', () => {
     assert.throws(() => msgpack.unpack(deep(1000)), /limit exceeded/);
   });
 });
+
+describe('unpack prototype pollution', () => {
+  /* Raw wire, not msgpack.pack(): a map whose only key is the string
+   * "__proto__". Nan::Set walked the inherited __proto__ setter and swapped
+   * the decoded object's prototype instead of storing a property. */
+  const protoWire = (valueBytes) =>
+    Buffer.concat([
+      Buffer.from([0x81]),
+      Buffer.from([0xa9]),
+      Buffer.from('__proto__', 'utf8'),
+      valueBytes,
+    ]);
+
+  it('makes an object-valued __proto__ key an own property', () => {
+    const wire = Buffer.from('81a95f5f70726f746f5f5f81a7697341646d696ec3', 'hex');
+    const decoded = msgpack.unpack(wire);
+
+    assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
+    assert.notEqual(decoded.isAdmin, true);
+    assert.deepEqual(Object.keys(decoded), ['__proto__']);
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptor(decoded, '__proto__'),
+      { value: { isAdmin: true }, writable: true, enumerable: true, configurable: true }
+    );
+    /* Nothing leaked onto Object.prototype either. */
+    assert.equal({}.isAdmin, undefined);
+  });
+
+  it('makes a scalar __proto__ key an own property', () => {
+    const decoded = msgpack.unpack(protoWire(Buffer.from([0x05])));
+
+    assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
+    assert.deepEqual(Object.keys(decoded), ['__proto__']);
+    assert.equal(Object.getOwnPropertyDescriptor(decoded, '__proto__').value, 5);
+  });
+
+  it('makes a nil __proto__ key an own property without nulling the prototype', () => {
+    /* `obj.__proto__ = null` via Set would have left a prototype-less object
+     * with no hasOwnProperty. */
+    const decoded = msgpack.unpack(protoWire(Buffer.from([0xc0])));
+
+    assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
+    assert.deepEqual(Object.keys(decoded), ['__proto__']);
+    assert.equal(Object.getOwnPropertyDescriptor(decoded, '__proto__').value, null);
+    assert.equal(decoded.hasOwnProperty('__proto__'), true);
+  });
+
+  it('still round-trips ordinary keys alongside __proto__', () => {
+    const wire = Buffer.concat([
+      Buffer.from([0x82]),
+      msgpack.pack('__proto__'),
+      msgpack.pack({ isAdmin: true }),
+      msgpack.pack('a'),
+      msgpack.pack(1),
+    ]);
+    const decoded = msgpack.unpack(wire);
+
+    assert.deepEqual(Object.keys(decoded), ['__proto__', 'a']);
+    assert.equal(decoded.a, 1);
+    assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
+  });
+});
+
+describe('pack does not abort on a throwing property read', () => {
+  /* Nan::Get(...).ToLocalChecked() on an empty MaybeLocal killed the process
+   * with "FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal". */
+  it('throws a catchable error for a throwing getter', () => {
+    assert.throws(() => msgpack.pack({ get a() { throw new Error('x'); } }), /^Error: x$/);
+    assert.equal(msgpack.unpack(msgpack.pack('ok')), 'ok');
+  });
+
+  it('throws a catchable error for a throwing Proxy ownKeys trap', () => {
+    const p = new Proxy({}, { ownKeys() { throw new Error('x'); } });
+    assert.throws(() => msgpack.pack(p), /^Error: x$/);
+    assert.equal(msgpack.unpack(msgpack.pack('ok')), 'ok');
+  });
+
+  it('throws a catchable error for a throwing Proxy get trap', () => {
+    const p = new Proxy({ a: 1 }, { get() { throw new Error('x'); } });
+    assert.throws(() => msgpack.pack(p), /^Error: x$/);
+    assert.equal(msgpack.unpack(msgpack.pack('ok')), 'ok');
+  });
+
+  it('throws a catchable error for a throwing array element getter', () => {
+    const a = [1];
+    Object.defineProperty(a, '0', { get() { throw new Error('x'); } });
+    assert.throws(() => msgpack.pack(a), /^Error: x$/);
+    assert.equal(msgpack.unpack(msgpack.pack('ok')), 'ok');
+  });
+
+  it('survives repeated throwing reads', () => {
+    for (let i = 0; i < 1000; i++) {
+      assert.throws(() => msgpack.pack({ get a() { throw new Error('x'); } }));
+    }
+    assert.equal(msgpack.unpack(msgpack.pack('ok')), 'ok');
+  });
+});

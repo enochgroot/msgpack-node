@@ -202,6 +202,43 @@ describe('msgpack.Stream', () => {
     assert.equal(errors.length, 1);
   });
 
+  it('delivers both frames when a msg listener calls unpack', () => {
+    /* bytes_remaining is a single C++ global: a listener that unpacks
+     * anything overwrites the value this loop needs to advance self.buf. */
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    const msgs = [];
+    ms.addListener('msg', (m) => {
+      msgs.push(m);
+      msgpack.unpack(Buffer.from([0x02]));
+    });
+
+    s.emit('data', Buffer.concat([msgpack.pack({ n: 1 }), msgpack.pack({ n: 2 })]));
+
+    assert.deepEqual(msgs, [{ n: 1 }, { n: 2 }]);
+  });
+
+  it('does not re-emit a frame whose msg listener threw', () => {
+    /* Emitting before advancing self.buf left the frame queued, so the next
+     * data event replayed it: seen became ['one', 'one', 'two', 'three']. */
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    const seen = [];
+    let first = true;
+    ms.addListener('msg', (m) => {
+      seen.push(m);
+      if (first) {
+        first = false;
+        throw new Error('listener blew up');
+      }
+    });
+
+    assert.throws(() => s.emit('data', msgpack.pack('one')), /listener blew up/);
+    s.emit('data', Buffer.concat([msgpack.pack('two'), msgpack.pack('three')]));
+
+    assert.deepEqual(seen, ['one', 'two', 'three']);
+  });
+
   it('round-trips over a TCP socket', (t, done) => {
     const server = net.createServer((c) => {
       c.write(msgpack.pack('hello '));

@@ -358,6 +358,50 @@ static v8::Local<v8::Value> CallNoArgs(v8::Local<v8::Object> recv,
   return r.ToLocalChecked();
 }
 
+/*
+ * Property reads during packing can run arbitrary JS: an accessor, a Proxy
+ * "get"/"ownKeys" trap, or an interceptor. When that JS throws, V8 hands back
+ * an empty Maybe, and ToLocalChecked() on it aborts the process
+ * ("FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal"). These wrappers turn
+ * the throw into a MsgpackException carrying the original error, exactly as
+ * CallNoArgs does for method calls.
+ */
+static void ThrowCaught(const Nan::TryCatch& try_catch) {
+  v8::Local<v8::Value> ex = try_catch.Exception();
+  if (ex.IsEmpty()) {
+    throw MsgpackException(Error("Error serializing object"));
+  }
+  throw MsgpackException(ex);
+}
+
+static v8::Local<v8::Value> CheckedGet(v8::Local<v8::Object> obj,
+                                       v8::Local<v8::Value> key) {
+  Nan::TryCatch try_catch;
+  Nan::MaybeLocal<v8::Value> r = Nan::Get(obj, key);
+  if (r.IsEmpty()) {
+    ThrowCaught(try_catch);
+  }
+  return r.ToLocalChecked();
+}
+
+static v8::Local<v8::Value> CheckedGet(v8::Local<v8::Object> obj, uint32_t index) {
+  Nan::TryCatch try_catch;
+  Nan::MaybeLocal<v8::Value> r = Nan::Get(obj, index);
+  if (r.IsEmpty()) {
+    ThrowCaught(try_catch);
+  }
+  return r.ToLocalChecked();
+}
+
+static v8::Local<v8::Array> CheckedOwnNames(v8::Local<v8::Object> obj) {
+  Nan::TryCatch try_catch;
+  Nan::MaybeLocal<v8::Array> r = Nan::GetOwnPropertyNames(obj);
+  if (r.IsEmpty()) {
+    ThrowCaught(try_catch);
+  }
+  return r.ToLocalChecked();
+}
+
 static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr, int depth) {
   if (IsMarked(arr)) {
     throw MsgpackException(Error("Cowardly refusing to pack circular reference"));
@@ -370,7 +414,7 @@ static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr, int depth) {
   }
   try {
     for (uint32_t i = 0; i < len; i++) {
-      JsToMsgpack(pk, Nan::Get(arr, i).ToLocalChecked(), depth);
+      JsToMsgpack(pk, CheckedGet(arr, i), depth);
     }
   } catch (...) {
     Unmark(arr);
@@ -387,9 +431,13 @@ static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj, int depth)
 
   /* toJSON wins over the map encoding, at every level, matching both
    * JSON.stringify and the top-level wrapper in lib/msgpack.js. */
-  v8::Local<v8::Value> to_json =
-      Nan::Get(obj, Nan::New("toJSON").ToLocalChecked()).FromMaybe(
-          v8::Local<v8::Value>(Nan::Undefined()));
+  v8::Local<v8::Value> to_json;
+  try {
+    to_json = CheckedGet(obj, Nan::New("toJSON").ToLocalChecked());
+  } catch (...) {
+    Unmark(obj);
+    throw;
+  }
   if (to_json->IsFunction()) {
     try {
       JsToMsgpack(pk, CallNoArgs(obj, to_json.As<v8::Function>()), depth);
@@ -403,7 +451,13 @@ static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj, int depth)
 
   /* Every own enumerable key is packed, numeric keys included; V8 hands back
    * index keys as Numbers, which JsToMsgpack packs as integer map keys. */
-  v8::Local<v8::Array> names = Nan::GetOwnPropertyNames(obj).ToLocalChecked();
+  v8::Local<v8::Array> names;
+  try {
+    names = CheckedOwnNames(obj);
+  } catch (...) {
+    Unmark(obj);
+    throw;
+  }
   uint32_t len = names->Length();
   if (msgpack_pack_map(pk, len)) {
     Unmark(obj);
@@ -411,9 +465,9 @@ static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj, int depth)
   }
   try {
     for (uint32_t i = 0; i < len; i++) {
-      v8::Local<v8::Value> key = Nan::Get(names, i).ToLocalChecked();
+      v8::Local<v8::Value> key = CheckedGet(names, i);
       JsToMsgpack(pk, key, depth);
-      JsToMsgpack(pk, Nan::Get(obj, key).ToLocalChecked(), depth);
+      JsToMsgpack(pk, CheckedGet(obj, key), depth);
     }
   } catch (...) {
     Unmark(obj);
@@ -455,7 +509,7 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
     /* Dates pack as their ISO-8601 string, as they did before 2.0.0. */
     v8::Local<v8::Object> date = o.As<v8::Object>();
     v8::Local<v8::Value> fn =
-        Nan::Get(date, Nan::New("toISOString").ToLocalChecked()).ToLocalChecked();
+        CheckedGet(date, Nan::New("toISOString").ToLocalChecked());
     if (!fn->IsFunction()) {
       throw MsgpackException(Error("cannot pack Date"));
     }
@@ -533,7 +587,15 @@ static v8::Local<v8::Value> MsgpackToJs(const msgpack_object* mo) {
         const msgpack_object_kv* kv = &mo->via.map.ptr[i];
         v8::Local<v8::Value> key = MsgpackToJs(&kv->key);
         v8::Local<v8::Value> val = MsgpackToJs(&kv->val);
-        Nan::Set(obj, key, val);
+        /* DefineOwnProperty, not Set: Set would run the __proto__ setter
+         * inherited from Object.prototype, letting a wire map replace the
+         * decoded object's prototype. Every key becomes a plain own,
+         * enumerable, writable, configurable data property. */
+        Nan::MaybeLocal<v8::String> name = Nan::To<v8::String>(key);
+        if (name.IsEmpty()) {
+          throw MsgpackException(Error("cannot unpack map key"));
+        }
+        Nan::DefineOwnProperty(obj, name.ToLocalChecked(), val);
       }
       return obj;
     }
