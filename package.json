@@ -10,6 +10,7 @@
     "url": "https://github.com/enochgroot/msgpack-node.git"
   },
   "main": "./lib/msgpack",
+  "types": "index.d.ts",
   "directories": {
     "lib": "lib"
   },
