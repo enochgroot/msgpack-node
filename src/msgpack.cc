@@ -628,7 +628,7 @@ struct SbufPool {
 
 /* thread_local, not process-global: a worker thread packing concurrently with
  * the main thread would otherwise hand the same sbuffer to both. */
-static SbufPool sbuf_pool;
+static thread_local SbufPool sbuf_pool;
 
 class PackBuffer {
  public:
@@ -646,16 +646,15 @@ class PackBuffer {
     }
   }
 
+  /* Offer the sbuffer back to this thread's pool whether or not it came from
+   * there: only handing back pooled buffers would leave the pool permanently
+   * empty, so every pack would malloc and every dtor would free. */
   ~PackBuffer() {
     if (sb_ == NULL) return;
-    if (from_pool_) {
-      if (sbuf_pool.length == kSbufferPoolMax) {
-        msgpack_sbuffer_free(sb_);
-      } else {
-        sbuf_pool.list[sbuf_pool.length++] = sb_;
-      }
-    } else {
+    if (sbuf_pool.length == kSbufferPoolMax) {
       msgpack_sbuffer_free(sb_);
+    } else {
+      sbuf_pool.list[sbuf_pool.length++] = sb_;
     }
     sb_ = NULL;
   }
@@ -783,7 +782,11 @@ NAN_MODULE_INIT(Init) {
 }
 
 /* Context-aware: without this the addon refuses to load in a worker_threads
- * Worker ("Module did not self-register"). */
-NODE_MODULE_CONTEXT_AWARE(msgpackBinding, Init)
+ * Worker ("Module did not self-register"). NAN_MODULE_WORKER_ENABLED is the
+ * right wrapper here -- Init is a NAN_MODULE_INIT, i.e. a one-argument
+ * function, while NODE_MODULE_CONTEXT_AWARE expects a four-argument
+ * addon_context_register_func and casts between the mismatched function
+ * pointer types. */
+NAN_MODULE_WORKER_ENABLED(msgpackBinding, Init)
 
 }  // namespace
