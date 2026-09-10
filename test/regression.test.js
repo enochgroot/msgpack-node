@@ -35,4 +35,20 @@ describe('regressions', () => {
       assert.equal(msgpack.unpack(msgpack.pack(n)), n);
     }
   });
+
+  it('unpacks a map written by Python msgpack (msgpack-node#10)', () => {
+    /* Latin-1 wire bytes straight out of python-msgpack: fixmap of 5 with a
+     * bool, two fixstrs, a uint8 and a bin8 payload. */
+    const wire = '\x85\xa8Coalesce\xc3\xa5Event\xa4user\xa5LTime\xcc\x01' +
+                 '\xa4Name\xa4test\xa7Payload\xc4\x03foo';
+    const unpacked = msgpack.unpack(Buffer.from(wire, 'latin1'));
+
+    assert.equal(unpacked.Coalesce, true);
+    assert.equal(unpacked.Event, 'user');
+    assert.equal(unpacked.LTime, 1);
+    assert.equal(unpacked.Name, 'test');
+    assert.ok(Buffer.isBuffer(unpacked.Payload));
+    assert.deepEqual(unpacked.Payload, Buffer.from('foo'));
+    assert.equal(msgpack.unpack.bytes_remaining, 0);
+  });
 });

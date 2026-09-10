@@ -173,6 +173,25 @@ describe('msgpack.Stream', () => {
     assert.equal(ms.listeners('msg')[0].args[0], 'hello');
   });
 
+  it('emits msg for a packed zero', () => {
+    /* msgpack-node#44: the loop tested `msg === null` against a falsy check,
+     * so a packed integer 0 was swallowed as "incomplete". */
+    const s = new EventEmitter();
+    const ms = new msgpack.Stream(s);
+    const msgs = [];
+    ms.addListener('msg', (m) => msgs.push(m));
+
+    s.emit('data', msgpack.pack(0));
+
+    assert.equal(msgs.length, 1);
+    assert.equal(typeof msgs[0], 'number');
+    assert.equal(msgs[0], 0);
+
+    /* And a 0 framed alongside neighbours still advances the buffer. */
+    s.emit('data', Buffer.concat([msgpack.pack(0), msgpack.pack('after')]));
+    assert.deepEqual(msgs, [0, 0, 'after']);
+  });
+
   it('emits msg for a packed null', () => {
     /* A decoded nil is a message, not an incomplete buffer. */
     const s = new EventEmitter();
