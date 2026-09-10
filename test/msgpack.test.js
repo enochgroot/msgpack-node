@@ -56,6 +56,17 @@ describe('msgpack pack/unpack', () => {
     assert.ok(Buffer.isBuffer(got[got.length - 1]));
   });
 
+  it('packs a top-level Buffer as bin, not a toJSON map', () => {
+    const buf = Buffer.from([1, 2, 3]);
+    const packed = msgpack.pack(buf);
+    assert.ok(Buffer.isBuffer(packed));
+    /* bin 8 for a 3-byte payload: 0xc4 len data, not fixstr and not a map. */
+    assert.equal(packed[0], 0xc4);
+    const got = msgpack.unpack(packed);
+    assert.ok(Buffer.isBuffer(got));
+    assert.deepEqual([...got], [1, 2, 3]);
+  });
+
   it('unpacks a 7-bit integer', () => {
     assert.equal(msgpack.unpack(Buffer.from([0x05])), 5);
   });
