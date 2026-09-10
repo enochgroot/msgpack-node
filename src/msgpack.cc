@@ -5,6 +5,12 @@
  * Unpack is fail-closed: oversized array/map/string/bin headers are rejected
  * before the C library allocates. Pack errors always release the sbuffer
  * (nodejs/node#25686).
+ *
+ * GCOVR_EXCL_BR_LINE / _START / _STOP markers below mark branches that cannot
+ * be reached from JS without stubbing the allocator or V8: allocation-failure
+ * arms of msgpack_pack_*, empty-MaybeLocal guards V8 only produces while an
+ * exception is pending, and post-ScanOne error arms that ScanOne has already
+ * ruled out. Each carries the reason inline; COVERAGE.md lists them all.
  */
 
 #include <cmath>
@@ -73,7 +79,10 @@ static ScanStatus CheckContainer(uint32_t n, size_t remaining, bool is_map, int 
   if (items > remaining) {
     /* Declared payload cannot exist in this buffer. If n is huge this is
      * a DoS header; if n is modest the message is merely truncated. */
-    if (n > kMaxContainer || items > kMaxBytes) return kScanLimit;
+    /* Both disjuncts are already excluded above: n > kMaxContainer returned
+     * at the top, and items is at most 2 * kMaxContainer, far under
+     * kMaxBytes. Kept as defence in depth if either constant changes. */
+    if (n > kMaxContainer || items > kMaxBytes) return kScanLimit;  /* GCOVR_EXCL_BR_LINE */
     return kScanContinue;
   }
   if (sp >= kMaxDepth) return kScanLimit;
@@ -132,7 +141,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
       uint32_t n = b & 0x1f;
       ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
       if (st != kScanOk) return st;
-      if (!Skip(&c, n)) return kScanContinue;
+      if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
       continue;
     }
 
@@ -148,7 +157,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU8(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xc5: { /* bin16 */
@@ -156,7 +165,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU16(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xc6: { /* bin32 */
@@ -164,7 +173,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU32(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xc7: { /* ext8 */
@@ -173,7 +182,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!Skip(&c, 1)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xc8: { /* ext16 */
@@ -182,7 +191,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!Skip(&c, 1)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xc9: { /* ext32 */
@@ -191,7 +200,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!Skip(&c, 1)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xca: /* float32 */
@@ -244,7 +253,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU8(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xda: { /* str16 */
@@ -252,7 +261,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU16(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xdb: { /* str32 */
@@ -260,7 +269,7 @@ static ScanStatus ScanOne(const char* data, size_t len, size_t* consumed) {
         if (!ReadU32(&c, &n)) return kScanContinue;
         ScanStatus st = CheckBytes(n, static_cast<size_t>(c.end - c.p));
         if (st != kScanOk) return st;
-        if (!Skip(&c, n)) return kScanContinue;
+        if (!Skip(&c, n)) return kScanContinue;  /* GCOVR_EXCL_BR_LINE: CheckBytes proved n <= remaining */
         break;
       }
       case 0xdc: { /* array16 */
@@ -337,7 +346,9 @@ static void Unmark(v8::Local<v8::Object> obj) {
 
 static bool IsMarked(v8::Local<v8::Object> obj) {
   Nan::MaybeLocal<v8::Value> v = Nan::GetPrivate(obj, StackKey());
-  if (v.IsEmpty()) return false;
+  /* A private-symbol read runs no interceptor and no Proxy trap, so it
+   * cannot leave an exception pending and cannot come back empty. */
+  if (v.IsEmpty()) return false;  /* GCOVR_EXCL_BR_LINE */
   return v.ToLocalChecked()->IsTrue();
 }
 
@@ -353,9 +364,12 @@ static v8::Local<v8::Value> CallNoArgs(v8::Local<v8::Object> recv,
   Nan::MaybeLocal<v8::Value> r = Nan::Call(fn, recv, 0, NULL);
   if (r.IsEmpty()) {
     v8::Local<v8::Value> ex = try_catch.Exception();
+    /* GCOVR_EXCL_BR_START: an empty Maybe always carries a pending
+     * exception, so the empty-exception fallback is unreachable. */
     if (ex.IsEmpty()) {
       throw MsgpackException(Error("Error serializing object"));
     }
+    /* GCOVR_EXCL_BR_STOP */
     throw MsgpackException(ex);
   }
   return r.ToLocalChecked();
@@ -371,9 +385,11 @@ static v8::Local<v8::Value> CallNoArgs(v8::Local<v8::Object> recv,
  */
 static void ThrowCaught(const Nan::TryCatch& try_catch) {
   v8::Local<v8::Value> ex = try_catch.Exception();
+  /* GCOVR_EXCL_BR_START: see CallNoArgs -- unreachable fallback. */
   if (ex.IsEmpty()) {
     throw MsgpackException(Error("Error serializing object"));
   }
+  /* GCOVR_EXCL_BR_STOP */
   throw MsgpackException(ex);
 }
 
@@ -382,7 +398,7 @@ static v8::Local<v8::Value> CheckedGet(v8::Local<v8::Object> obj,
   Nan::TryCatch try_catch;
   Nan::MaybeLocal<v8::Value> r = Nan::Get(obj, key);
   if (r.IsEmpty()) {
-    ThrowCaught(try_catch);
+    ThrowCaught(try_catch);  /* GCOVR_EXCL_BR_LINE: never returns */
   }
   return r.ToLocalChecked();
 }
@@ -391,7 +407,7 @@ static v8::Local<v8::Value> CheckedGet(v8::Local<v8::Object> obj, uint32_t index
   Nan::TryCatch try_catch;
   Nan::MaybeLocal<v8::Value> r = Nan::Get(obj, index);
   if (r.IsEmpty()) {
-    ThrowCaught(try_catch);
+    ThrowCaught(try_catch);  /* GCOVR_EXCL_BR_LINE: never returns */
   }
   return r.ToLocalChecked();
 }
@@ -400,7 +416,7 @@ static v8::Local<v8::Array> CheckedOwnNames(v8::Local<v8::Object> obj) {
   Nan::TryCatch try_catch;
   Nan::MaybeLocal<v8::Array> r = Nan::GetOwnPropertyNames(obj);
   if (r.IsEmpty()) {
-    ThrowCaught(try_catch);
+    ThrowCaught(try_catch);  /* GCOVR_EXCL_BR_LINE: never returns */
   }
   return r.ToLocalChecked();
 }
@@ -411,10 +427,13 @@ static void PackArray(msgpack_packer* pk, v8::Local<v8::Array> arr, int depth) {
   }
   Mark(arr);
   uint32_t len = arr->Length();
+  /* GCOVR_EXCL_BR_START: msgpack_sbuffer_write only fails on realloc
+   * failure, which no JS-reachable input can force. */
   if (msgpack_pack_array(pk, len)) {
     Unmark(arr);
     throw MsgpackException(Error("Error serializing object"));
   }
+  /* GCOVR_EXCL_BR_STOP */
   try {
     for (uint32_t i = 0; i < len; i++) {
       JsToMsgpack(pk, CheckedGet(arr, i), depth);
@@ -462,10 +481,12 @@ static void PackObject(msgpack_packer* pk, v8::Local<v8::Object> obj, int depth)
     throw;
   }
   uint32_t len = names->Length();
+  /* GCOVR_EXCL_BR_START: allocation failure only, as in PackArray. */
   if (msgpack_pack_map(pk, len)) {
     Unmark(obj);
     throw MsgpackException(Error("Error serializing object"));
   }
+  /* GCOVR_EXCL_BR_STOP */
   try {
     for (uint32_t i = 0; i < len; i++) {
       v8::Local<v8::Value> key = CheckedGet(names, i);
@@ -505,7 +526,7 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
   } else if (o->IsString()) {
     Nan::Utf8String bytes(o);
     rc = msgpack_pack_str(pk, bytes.length());
-    if (rc == 0) {
+    if (rc == 0) {  /* GCOVR_EXCL_BR_LINE: rc != 0 needs an allocation failure */
       rc = msgpack_pack_str_body(pk, *bytes, bytes.length());
     }
   } else if (o->IsDate()) {
@@ -519,7 +540,7 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
     v8::Local<v8::Value> iso = CallNoArgs(date, fn.As<v8::Function>());
     Nan::Utf8String bytes(iso);
     rc = msgpack_pack_str(pk, bytes.length());
-    if (rc == 0) {
+    if (rc == 0) {  /* GCOVR_EXCL_BR_LINE: rc != 0 needs an allocation failure */
       rc = msgpack_pack_str_body(pk, *bytes, bytes.length());
     }
   } else if (o->IsArray()) {
@@ -529,7 +550,7 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
     char* data = node::Buffer::Data(o.As<v8::Object>());
     size_t len = node::Buffer::Length(o.As<v8::Object>());
     rc = msgpack_pack_bin(pk, len);
-    if (rc == 0) {
+    if (rc == 0) {  /* GCOVR_EXCL_BR_LINE: rc != 0 needs an allocation failure */
       rc = msgpack_pack_bin_body(pk, data, len);
     }
   } else if (o->IsFunction()) {
@@ -541,9 +562,11 @@ static void JsToMsgpack(msgpack_packer* pk, v8::Local<v8::Value> o, int depth) {
     throw MsgpackException(Error("cannot pack object"));
   }
 
+  /* GCOVR_EXCL_BR_START: every rc above comes from an sbuffer write. */
   if (rc) {
     throw MsgpackException(Error("Error serializing object"));
   }
+  /* GCOVR_EXCL_BR_STOP */
 }
 
 static v8::Local<v8::Value> MsgpackToJs(const msgpack_object* mo);
@@ -595,15 +618,20 @@ static v8::Local<v8::Value> MsgpackToJs(const msgpack_object* mo) {
          * decoded object's prototype. Every key becomes a plain own,
          * enumerable, writable, configurable data property. */
         Nan::MaybeLocal<v8::String> name = Nan::To<v8::String>(key);
+        /* GCOVR_EXCL_BR_START: keys are decoded nil/bool/number/string/
+         * Buffer/Array/plain Object, none of which can throw in ToString. */
         if (name.IsEmpty()) {
           throw MsgpackException(Error("cannot unpack map key"));
         }
+        /* GCOVR_EXCL_BR_STOP */
         Nan::DefineOwnProperty(obj, name.ToLocalChecked(), val);
       }
       return obj;
     }
     default:
-      throw MsgpackException(Error("Encountered unknown object type"));
+      /* Every msgpack_object_type value is handled above; this only fires
+       * if the vendored library grows a new one. */
+      throw MsgpackException(Error("Encountered unknown object type"));  /* GCOVR_EXCL_BR_LINE */
   }
 }
 
@@ -641,16 +669,21 @@ class PackBuffer {
       sb_ = msgpack_sbuffer_new();
       from_pool_ = false;
     }
+    /* GCOVR_EXCL_BR_START: pooled buffers are never NULL and
+     * msgpack_sbuffer_new only returns NULL out of memory. */
     if (sb_ == NULL) {
       throw MsgpackException(Error("Error initializing packing buffer"));
     }
+    /* GCOVR_EXCL_BR_STOP */
   }
 
   /* Offer the sbuffer back to this thread's pool whether or not it came from
    * there: only handing back pooled buffers would leave the pool permanently
    * empty, so every pack would malloc and every dtor would free. */
   ~PackBuffer() {
-    if (sb_ == NULL) return;
+    /* sb_ is non-NULL from the ctor on (a throwing ctor runs no dtor) and
+     * is only cleared on the last line of this function. */
+    if (sb_ == NULL) return;  /* GCOVR_EXCL_BR_LINE */
     if (sbuf_pool.length == kSbufferPoolMax) {
       msgpack_sbuffer_free(sb_);
     } else {
@@ -697,9 +730,11 @@ NAN_METHOD(Pack) {
     if (info.Length() == 1) {
       JsToMsgpack(&pk, info[0], 0);
     } else {
+      /* GCOVR_EXCL_BR_START: allocation failure only. */
       if (msgpack_pack_array(&pk, info.Length())) {
         throw MsgpackException(Error("Error serializing object"));
       }
+      /* GCOVR_EXCL_BR_STOP */
       for (int i = 0; i < info.Length(); i++) {
         JsToMsgpack(&pk, info[i], 0);
       }
@@ -714,7 +749,7 @@ NAN_METHOD(Pack) {
     char* data = buf.release_data(&size);
     info.GetReturnValue().Set(
         Nan::NewBuffer(data, size, MsgpackFree, NULL).ToLocalChecked());
-  } catch (const MsgpackException& e) {
+  } catch (const MsgpackException& e) {  /* GCOVR_EXCL_BR_LINE: nothing here throws another type */
     Nan::ThrowError(e.value());
   }
 }
@@ -750,18 +785,27 @@ NAN_METHOD(Unpack) {
   msgpack_unpack_return ret = msgpack_unpack_next(&result, data, len, &off);
   remaining_bytes_in_buffer = static_cast<int>(len - off);
 
-  if (ret == MSGPACK_UNPACK_SUCCESS || ret == MSGPACK_UNPACK_EXTRA_BYTES) {
+  /* ScanOne has already walked the same grammar with limits at or below the
+   * vendored library's own (511 vs 512 nested containers, the same 1e6
+   * element cap), so once it reports kScanOk msgpack_unpack_next can only
+   * report success. The CONTINUE / PARSE_ERROR / NOMEM arms below are kept
+   * so a future divergence fails closed rather than reading result.data
+   * uninitialised. */
+  /* Only the SUCCESS disjunct is reachable: the vendored
+   * msgpack_unpack_next never returns EXTRA_BYTES. */
+  if (ret == MSGPACK_UNPACK_SUCCESS || ret == MSGPACK_UNPACK_EXTRA_BYTES) {  /* GCOVR_EXCL_BR_LINE */
     try {
       v8::Local<v8::Value> v = MsgpackToJs(&result.data);
       msgpack_unpacked_destroy(&result);
       info.GetReturnValue().Set(v);
       return;
-    } catch (const MsgpackException& e) {
+    } catch (const MsgpackException& e) {  /* GCOVR_EXCL_BR_LINE: MsgpackToJs throws nothing else */
       msgpack_unpacked_destroy(&result);
       return Nan::ThrowError(e.value());
     }
   }
 
+  /* GCOVR_EXCL_BR_START: unreachable tail, see above. */
   msgpack_unpacked_destroy(&result);
   if (ret == MSGPACK_UNPACK_CONTINUE) {
     remaining_bytes_in_buffer = static_cast<int>(len);
@@ -769,6 +813,7 @@ NAN_METHOD(Unpack) {
     return;
   }
   Nan::ThrowError("Encountered error unpacking buffer");
+  /* GCOVR_EXCL_BR_STOP */
 }
 
 NAN_MODULE_INIT(Init) {
