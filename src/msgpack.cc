@@ -317,8 +317,11 @@ static v8::Local<v8::Value> Error(const char* msg) {
   return Nan::Error(msg);
 }
 
-/* Persistent identity flag for cycle detection (not enumerable). */
-static Nan::Persistent<v8::String> stack_key;
+/* Persistent identity flag for cycle detection (not enumerable).
+ * thread_local because a v8::Persistent belongs to the isolate that created
+ * it: with a process-global handle, a worker's Init() would dispose the main
+ * isolate's string and then hand its own back to main-thread pack(). */
+static thread_local Nan::Persistent<v8::String> stack_key;
 
 static v8::Local<v8::String> StackKey() {
   return Nan::New(stack_key);
@@ -607,9 +610,25 @@ static v8::Local<v8::Value> MsgpackToJs(const msgpack_object* mo) {
 struct SbufPool {
   msgpack_sbuffer* list[kSbufferPoolMax];
   size_t length;
+
+  SbufPool() : list(), length(0) {}
+
+  /* Each thread owns its pool, so release the cached sbuffers when the
+   * thread goes away instead of leaking them per worker. */
+  ~SbufPool() {
+    while (length > 0) {
+      msgpack_sbuffer_free(list[--length]);
+    }
+  }
+
+ private:
+  SbufPool(const SbufPool&);
+  SbufPool& operator=(const SbufPool&);
 };
 
-static SbufPool sbuf_pool = {{0}, 0};
+/* thread_local, not process-global: a worker thread packing concurrently with
+ * the main thread would otherwise hand the same sbuffer to both. */
+static SbufPool sbuf_pool;
 
 class PackBuffer {
  public:
@@ -662,7 +681,9 @@ static void MsgpackFree(char* data, void* hint) {
   free(data);
 }
 
-static int remaining_bytes_in_buffer = 0;
+/* thread_local for the same reason as sbuf_pool: unpack() on a worker must
+ * not clobber the value the main thread's unpack.bytes_remaining reads. */
+static thread_local int remaining_bytes_in_buffer = 0;
 
 NAN_METHOD(BytesRemaining) {
   info.GetReturnValue().Set(Nan::New<v8::Number>(remaining_bytes_in_buffer));
@@ -761,6 +782,8 @@ NAN_MODULE_INIT(Init) {
            Nan::GetFunction(Nan::New<v8::FunctionTemplate>(BytesRemaining)).ToLocalChecked());
 }
 
-NODE_MODULE(msgpackBinding, Init)
+/* Context-aware: without this the addon refuses to load in a worker_threads
+ * Worker ("Module did not self-register"). */
+NODE_MODULE_CONTEXT_AWARE(msgpackBinding, Init)
 
 }  // namespace
