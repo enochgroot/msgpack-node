@@ -84,10 +84,13 @@ more than 512 levels deep` instead of overflowing the C stack.
 ```
 npm install
 npm test
+npm run coverage
 ```
 
 Needs a C/C++ toolchain and Python (node-gyp). GitHub Actions runs Node 18/20/22
-on Ubuntu and macOS.
+on Ubuntu and macOS. `npm run coverage` instruments JavaScript with c8 and the
+native addon with gcov, and fails under 95%. Gates and remaining uncovered
+lines are documented in [`COVERAGE.md`](COVERAGE.md).
 
 ### Command line
 
