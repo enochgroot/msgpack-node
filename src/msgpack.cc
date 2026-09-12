@@ -4,7 +4,7 @@
  * Pack/unpack JavaScript values via vendored msgpack-c (C API).
  * Unpack is fail-closed: oversized array/map/string/bin headers are rejected
  * before the C library allocates. Pack errors always release the sbuffer
- * (nodejs/node#25686).
+ * (msgpack/msgpack-node#25686).
  *
  * GCOVR_EXCL_BR_LINE / _START / _STOP markers below mark branches that cannot
  * be reached from JS without stubbing the allocator or V8: allocation-failure

@@ -43,7 +43,7 @@ describe('unpack DoS limits', () => {
   });
 });
 
-describe('pack throw paths do not leak (nodejs/node#25686)', () => {
+describe('pack throw paths do not leak (msgpack/msgpack-node#25686)', () => {
   it('survives many pack failures without crashing', () => {
     for (let i = 0; i < 20000; i++) {
       assert.throws(() => msgpack.pack([function () {}]));

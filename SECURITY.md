@@ -43,7 +43,7 @@ to pack object nested more than 512 levels deep`. Without that cap, a value
 such as 8,000 nested arrays recursed until the C stack overflowed and the
 process died with SIGSEGV.
 
-## nodejs/node#25686 (sbuffer leak on pack throw)
+## msgpack/msgpack-node#25686 (sbuffer leak on pack throw)
 
 `pack()` used to allocate a `msgpack_sbuffer` and return via `Nan::ThrowError`
 on circular refs / unencodable values without freeing it. The sbuffer is now
