@@ -10,7 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-2022 ships VS 2022. windows-latest currently has VS 2026
+        # (18.x), which node-gyp 10/11 bundled with Node 18/20/22 reports as
+        # unknown version "undefined" and then fails the native rebuild.
+        os: [ubuntu-latest, macos-latest, windows-2022]
         node: [18, 20, 22]
     steps:
       - uses: actions/checkout@v4
@@ -18,9 +21,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Install and test
-        run: |
-          npm install
-          npm test
+        # bash so `&&` is a hard stop on Windows too (PowerShell would still
+        # run npm test after a failed rebuild).
+        shell: bash
+        run: npm install && npm test
 
   coverage:
     runs-on: ubuntu-latest

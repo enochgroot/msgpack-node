@@ -233,7 +233,7 @@ describe('msgpack.Stream', () => {
   });
 
   it('delivers both frames when a msg listener calls unpack', () => {
-    /* bytes_remaining is a single C++ global: a listener that unpacks
+    /* bytesRemaining is thread_local native state: a listener that unpacks
      * anything overwrites the value this loop needs to advance self.buf. */
     const s = new EventEmitter();
     const ms = new msgpack.Stream(s);
