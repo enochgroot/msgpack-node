@@ -25,9 +25,9 @@ the buffer is a truncated (incomplete) MessagePack object. Oversized
 array/map/string bombs throw.
 
 A streaming helper wraps a readable socket and emits `msg`, plus `error` when
-a packet cannot be unpacked or the receive buffer would exceed
+a packet cannot be unpacked, the receive buffer would exceed
 `MAX_STREAM_BYTES` (the offending buffer is dropped, and the socket is
-destroyed when possible):
+destroyed when possible), or the underlying stream errors:
 
 ```javascript
 const msgpack = require('msgpack');

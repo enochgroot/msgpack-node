@@ -281,7 +281,11 @@ describe('msgpack.Stream', () => {
   it('rejects a receive concat that would exceed MAX_STREAM_BYTES before allocate', () => {
     const s = new EventEmitter();
     let destroyed = 0;
-    s.destroy = function () { destroyed += 1; };
+    /* Node's stream.destroy(err) emits 'error' on the socket. */
+    s.destroy = function (err) {
+      destroyed += 1;
+      if (err) s.emit('error', err);
+    };
     const ms = new msgpack.Stream(s);
     const errors = [];
     ms.addListener('error', (e) => errors.push(e));
@@ -301,7 +305,10 @@ describe('msgpack.Stream', () => {
   it('rejects a first chunk longer than MAX_STREAM_BYTES', () => {
     const s = new EventEmitter();
     let destroyed = 0;
-    s.destroy = function () { destroyed += 1; };
+    s.destroy = function (err) {
+      destroyed += 1;
+      if (err) s.emit('error', err);
+    };
     const ms = new msgpack.Stream(s);
     const errors = [];
     ms.addListener('error', (e) => errors.push(e));
@@ -317,12 +324,18 @@ describe('msgpack.Stream', () => {
     for (const ev of ['close', 'end', 'error']) {
       const s = new EventEmitter();
       const ms = new msgpack.Stream(s);
+      const errors = [];
+      ms.addListener('error', (e) => errors.push(e));
       s.emit('data', packed.subarray(0, packed.length - 1));
       assert.ok(ms.buf, ev);
       if (ev === 'error') {
-        s.emit('error', new Error('socket down'));
+        const sockErr = new Error('socket down');
+        s.emit('error', sockErr);
+        assert.equal(errors.length, 1, ev);
+        assert.strictEqual(errors[0], sockErr, ev);
       } else {
         s.emit(ev);
+        assert.equal(errors.length, 0, ev);
       }
       assert.equal(ms.buf, null, ev);
     }
